@@ -1,0 +1,4 @@
+{
+  "name": "tips-bot",
+  "engines": { "node": "24.x" }
+}

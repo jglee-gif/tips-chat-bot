@@ -392,7 +392,7 @@ async function callAI(prompt) {
 // 키워드 검색
 // ============================================================
 const SYNONYMS = {
-  '요건': ['조건', '기준', '요건'],
+  '요건': ['조건', '기준'],
   '성공요건': ['성공조건', '성공기준', '사업화성공조건'],
   '사업화성공': ['성공요건', '성공조건', '성공기준'],
   '정산': ['정산', '집행', '결산'],
@@ -403,31 +403,22 @@ function expandTokens(tokens) {
   const expanded = new Set(tokens);
   tokens.forEach(t => {
     if (SYNONYMS[t]) SYNONYMS[t].forEach(s => expanded.add(s));
-    if (t.length >= 4) {
-      for (let i = 2; i <= t.length-2; i++) {
-        expanded.add(t.slice(0,i));
-        expanded.add(t.slice(i));
-      }
-    }
+    if (t.length >= 4) { for (let i=2;i<=t.length-2;i++){expanded.add(t.slice(0,i));expanded.add(t.slice(i));}}
   });
   return [...expanded];
 }
 function tokenize(t) { return (t.match(/[가-힣a-zA-Z0-9]+/g)||[]).filter(x=>x.length>=2); }
 function scoreChunk(chunk, tokens) {
   const text = chunk.t;
-  const textCompact = text.replace(/\s+/g, '');
-  const allTokens = expandTokens(tokens);
-  let score = 0;
-  for (const t of allTokens) {
+  const tc = text.replace(/\s+/g,'');
+  const all = expandTokens(tokens);
+  let s = 0;
+  for (const t of all) {
     const w = tokens.includes(t) ? 2 : 1;
-    if (text.includes(t)) {
-      score += Math.sqrt(t.length) * w;
-      score += Math.log(((text.match(new RegExp(t,'g'))||[]).length)+1)*0.5*w;
-    } else if (textCompact.includes(t)) {
-      score += Math.sqrt(t.length) * w * 0.8;
-    }
+    if (text.includes(t)) { s += Math.sqrt(t.length)*w + Math.log(((text.match(new RegExp(t,'g'))||[]).length+1))*0.5*w; }
+    else if (tc.includes(t)) { s += Math.sqrt(t.length)*w*0.8; }
   }
-  return score;
+  return s;
 }
 function retrieveChunks(query, topK=12) {
   const tokens = tokenize(query);
@@ -662,45 +653,42 @@ ${text}
     lb.innerHTML=''; lb.textContent=answer;
     if(sources.length){
       const div=document.createElement('div'); div.style.marginTop='8px';
-      const DRIVE_FOLDER = "https://drive.google.com/drive/folders/1O65-x2Wv0aE7RQQz8Nwh2Jmg29Ag3DMT?usp=drive_link";
-      const SRC_INFO = {
-        "운영지침":           { label:"📋 2026 운영지침",        url:"https://drive.google.com/file/d/11_0gJAFPtTG7bagPlkGcCjbKxv9ECq0M/view?usp=sharing" },
-        "최종평가_프로세스":  { label:"🏁 최종평가 프로세스",     url:"https://drive.google.com/file/d/13mP4t0xNziSgjjYWXGb9GuU32ttAiENc/view?usp=drive_link" },
-        "연구개발비_관리사용":{ label:"💰 연구개발비 관리·사용",  url:"https://drive.google.com/file/d/1n5fKoARxfFl2BJNTq4QMRSFq2G2_MYLK/view?usp=drive_link" },
-        "제출서류_작성요령":  { label:"📄 제출서류 작성요령",     url:"https://drive.google.com/file/d/1Y4Hr72nNJVncQTD0yNHwDIQQYS9E0uvE/view?usp=drive_link" },
-        "일반트랙":           { label:"📘 일반트랙 교육자료",     url:"https://drive.google.com/file/d/1En6tvQbfmH53eEFif5skqfzlS1pa-7Nd/view?usp=drive_link" },
-        "딥테크트랙":         { label:"🔬 딥테크트랙 교육자료",   url:"https://drive.google.com/file/d/1lCFYJAhYr9Nj3Fb-f8fgxJWMu1svko21/view?usp=drive_link" },
-        "최종평가":           { label:"🏁 최종평가 안내자료",     url:"" },
-        "연구개발비_관리":    { label:"💰 연구개발비 관리",       url:"" },
-        "연구개발비_정산":    { label:"📊 연구개발비 정산",       url:"" },
-        "IRIS_FAQ":           { label:"❓ IRIS FAQ",             url:"" },
-        "IRIS_접수필수":      { label:"📝 IRIS 접수 필수사항",    url:"" },
+      const DRIVE_FOLDER="https://drive.google.com/drive/folders/1O65-x2Wv0aE7RQQz8Nwh2Jmg29Ag3DMT?usp=drive_link";
+      const SRC_INFO={
+        "운영지침":{label:"📋 2026 운영지침",url:"https://drive.google.com/file/d/11_0gJAFPtTG7bagPlkGcCjbKxv9ECq0M/view?usp=sharing"},
+        "최종평가_프로세스":{label:"🏁 최종평가 프로세스",url:"https://drive.google.com/file/d/13mP4t0xNziSgjjYWXGb9GuU32ttAiENc/view?usp=drive_link"},
+        "연구개발비_관리사용":{label:"💰 연구개발비 관리·사용",url:"https://drive.google.com/file/d/1n5fKoARxfFl2BJNTq4QMRSFq2G2_MYLK/view?usp=drive_link"},
+        "제출서류_작성요령":{label:"📄 제출서류 작성요령",url:"https://drive.google.com/file/d/1Y4Hr72nNJVncQTD0yNHwDIQQYS9E0uvE/view?usp=drive_link"},
+        "일반트랙":{label:"📘 일반트랙 교육자료",url:"https://drive.google.com/file/d/1En6tvQbfmH53eEFif5skqfzlS1pa-7Nd/view?usp=drive_link"},
+        "딥테크트랙":{label:"🔬 딥테크트랙 교육자료",url:"https://drive.google.com/file/d/1lCFYJAhYr9Nj3Fb-f8fgxJWMu1svko21/view?usp=drive_link"},
+        "최종평가":{label:"🏁 최종평가 안내자료",url:""},
+        "연구개발비_관리":{label:"💰 연구개발비 관리",url:""},
+        "연구개발비_정산":{label:"📊 연구개발비 정산",url:""},
+        "IRIS_FAQ":{label:"❓ IRIS FAQ",url:""},
+        "IRIS_접수필수":{label:"📝 IRIS 접수 필수사항",url:""},
       };
-      const seen=new Set();
-      let hasUnlinked = false;
+      const seen=new Set(); let hasUnlinked=false;
       sources.forEach(s=>{
         if(!seen.has(s)){seen.add(s);
-          const info = SRC_INFO[s] || {label:s, url:''};
-          if (info.url) {
-            const a=document.createElement('a'); a.className='source-tag';
-            a.textContent=info.label; a.href=info.url; a.target='_blank';
-            a.style.textDecoration='none'; a.title='클릭하여 원본 파일 열기';
+          const info=SRC_INFO[s]||{label:s,url:''};
+          if(info.url){
+            const a=document.createElement('a');a.className='source-tag';
+            a.textContent=info.label;a.href=info.url;a.target='_blank';
+            a.style.textDecoration='none';a.title='클릭하여 원본 파일 열기';
             div.appendChild(a);
           } else {
-            const tag=document.createElement('span'); tag.className='source-tag';
-            tag.textContent=info.label; div.appendChild(tag);
-            hasUnlinked = true;
+            const tag=document.createElement('span');tag.className='source-tag';
+            tag.textContent=info.label;div.appendChild(tag);hasUnlinked=true;
           }
         }
       });
-      if (hasUnlinked) {
-        const a=document.createElement('a'); a.className='source-tag';
+      if(hasUnlinked){
+        const a=document.createElement('a');a.className='source-tag';
         a.textContent='📁 그 외 자료는 DRIVE 폴더 확인';
-        a.href=DRIVE_FOLDER; a.target='_blank';
-        a.style.textDecoration='none'; a.style.opacity='0.8';
+        a.href=DRIVE_FOLDER;a.target='_blank';
+        a.style.textDecoration='none';a.style.opacity='0.8';
         div.appendChild(a);
       }
-      });
       lb.appendChild(div);
     }
   } catch(err){

@@ -369,7 +369,7 @@ function checkCode() {
 }
 
 // ============================================================
-// AI 호출 (Gemini via 서버리스)
+// AI 호출 (Claude via 서버리스)
 // ============================================================
 async function callAI(prompt, maxTokens) {
   const res = await fetch('/api/chat', {
@@ -386,7 +386,7 @@ async function callAI(prompt, maxTokens) {
   }
   if (!res.ok) {
     const err = new Error(data.error || `서버 오류 (HTTP ${res.status})`);
-    if (res.status === 429) err.retryAfter = data.retryAfter || 30;
+    if (res.status === 429 || res.status === 503) err.retryAfter = data.retryAfter || 30;
     throw err;
   }
   return data.answer;
@@ -579,12 +579,13 @@ function removeFile() {
 }
 
 // ------------------------------------------------------------
-// 분할 검토: 문서를 여러 부분으로 나눠 부분별 분석 → 최종 종합
-// Groq 무료 한도(분당 약 12,000토큰)를 넘지 않도록 요청 간격을 조절한다
+// 계획서 검토: 15,000자 이하는 한 번에 검토,
+// 더 길면 여러 부분으로 나눠 부분별 분석 → 최종 종합
+// Claude API 분당 입력 한도(Tier 1 기준 약 50,000토큰)를 넘지 않도록 요청 간격을 조절한다
 // ------------------------------------------------------------
-const REVIEW_PART_CHARS = 3500;   // 부분당 글자 수
-const REVIEW_MAX_PARTS = 12;      // 최대 부분 수 (약 42,000자)
-const TPM_BUDGET = 10000;         // 분당 사용 목표 (한도 12,000보다 여유 있게)
+const REVIEW_PART_CHARS = 15000;  // 부분당 글자 수
+const REVIEW_MAX_PARTS = 6;       // 최대 부분 수 (약 90,000자)
+const TPM_BUDGET = 40000;         // 분당 사용 목표 (한도보다 여유 있게)
 const _tokenLog = [];             // [시각(ms), 추정 토큰]
 
 // 한글 1자 ≈ 1.2토큰으로 보수적으로 추정 + 응답 토큰
@@ -655,19 +656,20 @@ async function runReview() {
     omitted = parts.slice(REVIEW_MAX_PARTS).reduce((a,p)=>a+p.length,0);
     parts = parts.slice(0,REVIEW_MAX_PARTS);
   }
-  const total = parts.length + 1;   // 부분 분석 + 최종 종합
+  const split = parts.length > 1;
+  const total = split ? parts.length + 1 : 1;   // 부분 분석 + 최종 종합
   const log = [];
   const render = (status) => {
     btn.textContent = '⏳ ' + status;
     body.textContent = log.concat(['⏳ ' + status]).join('\n');
   };
-  title.textContent = docLabel + ' 검토 진행 중 (' + parts.length + '개 부분으로 나눠 분석)';
+  title.textContent = docLabel + ' 검토 진행 중' + (split ? ' (' + parts.length + '개 부분으로 나눠 분석)' : '');
   resultBox.style.display='block';
 
   try {
-    // 1단계: 부분별 분석
+    // 1단계: 부분별 분석 (긴 문서만)
     const notes = [];
-    for (let i=0;i<parts.length;i++) {
+    for (let i=0;split && i<parts.length;i++) {
       const step = `${i+1}/${total} 단계: ${i+1}번째 부분 분석 중...`;
       render(step);
       const partPrompt=`당신은 TIPS(민간투자주도형 기술창업지원) 사업계획서 검토위원입니다.
@@ -681,28 +683,30 @@ async function runReview() {
 
 === ${i+1}번째 부분 ===
 ${parts[i]}`;
-      const note = await paceCallAI(partPrompt, 600, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
+      const note = await paceCallAI(partPrompt, 1000, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
       notes.push(`[${i+1}번째 부분]\n${note.trim()}`);
       log.push(`✔ ${i+1}번째 부분 분석 완료`);
     }
 
-    // 2단계: 최종 종합 (부분 메모가 길면 균등하게 잘라 분량 제한)
-    const step = `${total}/${total} 단계: 최종 검토 의견 종합 중...`;
+    // 2단계: 최종 검토 (짧은 문서는 원문 전체, 긴 문서는 부분별 메모로 종합)
+    const step = split ? `${total}/${total} 단계: 최종 검토 의견 종합 중...` : 'AI 검토 중... (30초~1분 소요)';
     render(step);
-    const noteBudget = 5000;
-    const perNote = Math.floor(noteBudget / notes.length);
-    const notesText = notes.map(n => n.length>perNote ? n.slice(0,perNote)+'…' : n).join('\n\n');
-    const relevant=retrieveChunks(docLabel+' 작성 기준 요건 항목',3);
-    const context=relevant.map(c=>`[${c.s} p.${c.p}]\n${c.t.slice(0,450)}`).join('\n\n---\n\n');
+    const relevant=retrieveChunks(docLabel+' 작성 기준 요건 항목',6);
+    const context=relevant.map(c=>`[${c.s} p.${c.p}]\n${c.t}`).join('\n\n---\n\n');
+    const intro = split
+      ? `제출된 "${docLabel}"(전체 ${extractedText.length.toLocaleString()}자)를 ${notes.length}개 부분으로 나눠 분석한 메모가 아래에 있습니다.
+TIPS 공식 기준 문서를 참고하여 문서 전체에 대한 최종 검토 의견을 작성하세요.`
+      : `아래 TIPS 공식 기준 문서를 참고하여 제출된 "${docLabel}"를 전문적으로 검토해 주세요.`;
+    const target = split
+      ? `=== 부분별 분석 메모 ===\n${notes.join('\n\n')}`
+      : `=== 검토 대상: ${docLabel} ===\n${parts[0]}`;
     const finalPrompt=`당신은 TIPS(민간투자주도형 기술창업지원) 사업계획서 전문 검토위원입니다.
-제출된 "${docLabel}"(전체 ${extractedText.length.toLocaleString()}자)를 ${notes.length}개 부분으로 나눠 분석한 메모가 아래에 있습니다.
-TIPS 공식 기준 문서를 참고하여 문서 전체에 대한 최종 검토 의견을 작성하세요.
+${intro}
 
 === TIPS 기준 문서 ===
 ${context}
 
-=== 부분별 분석 메모 ===
-${notesText}
+${target}
 
 === 검토 항목: ${checks.join(', ')} ===
 
@@ -725,11 +729,12 @@ ${notesText}
 3.
 
 평가위원 관점에서 객관적이고 건설적으로, 한국어로 작성해 주세요.`;
-    const answer = await paceCallAI(finalPrompt, 1800, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
+    const answer = await paceCallAI(finalPrompt, 3000, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
 
     title.textContent = docLabel + ' 검토 결과';
     body.textContent = answer
       + (omitted ? `\n\n※ 문서가 길어 뒷부분 약 ${omitted.toLocaleString()}자는 검토에서 제외되었습니다.` : '');
+    if (split) {
     const details = document.createElement('details');
     details.style.marginTop = '16px';
     const summary = document.createElement('summary');
@@ -740,6 +745,7 @@ ${notesText}
     pre.style.marginTop = '8px'; pre.style.color = '#555';
     details.append(summary, pre);
     body.appendChild(details);
+    }
     resultBox.scrollIntoView({behavior:'smooth',block:'start'});
   } catch(err) {
     title.textContent='오류';

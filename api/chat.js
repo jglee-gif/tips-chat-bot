@@ -7,6 +7,8 @@ const {
   BadRequestError,
   APIError,
 } = require('@anthropic-ai/sdk');
+// 선정기업 벤치마크는 서버에만 두고, 요청 시 프롬프트의 {{BENCHMARK}} 자리에 삽입한다
+const BENCHMARK = require('./_benchmark.js');
 
 // 모델은 Vercel 환경변수 CLAUDE_MODEL로 바꿀 수 있음 (예: claude-sonnet-5)
 const MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
@@ -26,7 +28,11 @@ module.exports = async function handler(req, res) {
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch (e) { body = {}; }
   }
-  const { prompt, accessCode } = body || {};
+  const { accessCode } = body || {};
+  let prompt = body?.prompt;
+  if (typeof prompt === 'string' && Object.prototype.hasOwnProperty.call(BENCHMARK, body?.benchmark)) {
+    prompt = prompt.replace('{{BENCHMARK}}', () => BENCHMARK[body.benchmark]);
+  }
   const maxTokens = Math.min(Math.max(parseInt(body?.maxTokens, 10) || 2048, 128), 4096);
 
   if (accessCode !== process.env.ACCESS_CODE) {
@@ -49,7 +55,7 @@ module.exports = async function handler(req, res) {
       .filter((b) => b.type === 'text')
       .map((b) => b.text)
       .join('');
-    return res.status(200).json({ answer: text });
+    return res.status(200).json({ answer: text, truncated: response.stop_reason === 'max_tokens' });
 
   } catch (e) {
     console.error('Claude API error', e);

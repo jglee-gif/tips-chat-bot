@@ -352,6 +352,7 @@
             <label><input type="checkbox" id="chkForm" checked> ① 양식 준수 (빠진 항목)</label>
             <label><input type="checkbox" id="chkIndicator" checked> ② 평가지표 반영 보완점</label>
             <label><input type="checkbox" id="chkSuccess" checked> ③ 사업화 성공요건 정합성</label>
+            <label><input type="checkbox" id="chkBenchmark" checked> ④ 선정기업 대비 정성 평가</label>
           </div>
         </div>
 
@@ -415,11 +416,12 @@ function checkCode() {
 // ============================================================
 // AI 호출 (Claude via 서버리스)
 // ============================================================
-async function callAI(prompt, maxTokens) {
+// benchmark: 'general' | 'deeptech' 이면 서버가 프롬프트의 {{BENCHMARK}}에 선정기업 기준표를 삽입
+async function callAI(prompt, maxTokens, benchmark) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ prompt, accessCode, maxTokens })
+    body: JSON.stringify({ prompt, accessCode, maxTokens, benchmark })
   });
   const raw = await res.text();
   let data;
@@ -433,7 +435,9 @@ async function callAI(prompt, maxTokens) {
     if (res.status === 429 || res.status === 503) err.retryAfter = data.retryAfter || 30;
     throw err;
   }
-  return data.answer;
+  return data.truncated
+    ? data.answer + '\n\n※ 응답 길이 한도에 도달해 이 부분의 끝이 잘렸을 수 있습니다. 검토 항목을 나눠 다시 실행해 보세요.'
+    : data.answer;
 }
 
 // ============================================================
@@ -706,8 +710,9 @@ async function waitSeconds(sec, onTick) {
 }
 
 // 최근 60초 사용량이 예산을 넘으면 여유가 생길 때까지 대기 후 호출, 429면 재시도
-async function paceCallAI(prompt, maxTokens, onWait) {
-  const need = estimateTokens(prompt, maxTokens);
+async function paceCallAI(prompt, maxTokens, onWait, benchmark) {
+  // 서버에서 삽입되는 선정기업 기준표 분량(약 5,000자)도 사용량에 포함
+  const need = estimateTokens(prompt, maxTokens) + (benchmark ? 6000 : 0);
   for (let attempt = 0; attempt < 4; attempt++) {
     while (true) {
       const now = Date.now();
@@ -718,7 +723,7 @@ async function paceCallAI(prompt, maxTokens, onWait) {
     }
     _tokenLog.push([Date.now(), need]);
     try {
-      return await callAI(prompt, maxTokens);
+      return await callAI(prompt, maxTokens, benchmark);
     } catch (err) {
       if (!err.retryAfter || attempt === 3) throw err;
       await waitSeconds(err.retryAfter + 2, onWait);
@@ -881,7 +886,8 @@ async function runReview() {
   const doForm = document.getElementById('chkForm').checked;
   const doIndicator = document.getElementById('chkIndicator').checked;
   const doSuccess = document.getElementById('chkSuccess').checked;
-  if (!doForm && !doIndicator && !doSuccess) { alert('검토 항목을 1개 이상 선택해 주세요.'); return; }
+  const doBenchmark = document.getElementById('chkBenchmark').checked;
+  if (!doForm && !doIndicator && !doSuccess && !doBenchmark) { alert('검토 항목을 1개 이상 선택해 주세요.'); return; }
   const track = (document.querySelector('input[name=reviewTrack]:checked') || {}).value || 'general';
   const trackLabel = track === 'deeptech' ? '딥테크트랙' : '일반트랙';
   const docLabel = '연구개발계획서';
@@ -983,7 +989,16 @@ ${parts[i]}`;
   · 고용계획 표에 청년인력 의무채용(정부지원연구개발비 5억원당 1명) 인원이 반영되어 있는지
   · 투자 요건은 기준 금액이 약 6개월마다 바뀌므로 충족 여부를 판정하지 말 것. 표의 투자 행은 기준 칸에 "${track === 'deeptech' ? 'VC 평균 투자금의 1.5배 (전문기관' : 'VC 평균 투자금 (업무지원기관'} 최신 공지)", 판정 칸에 "⚠️ 별도 확인"으로 쓰고, 계획서의 후속투자 목표 금액·시점만 원문 그대로 적을 것`);
     }
-    outFormat.push(`【개선 제안 (우선순위 순)】
+    // ④는 응답 길이 한도를 피하려고 별도 호출로 분리 (서버가 {{BENCHMARK}}에 기준표 삽입)
+    const benchFormat = !doBenchmark ? '' : (`【${n + 1}. 선정기업 대비 정성 평가】
+선정기업 벤치마크와 비교해 영역별로 표로 작성: | 영역 | 선정기업 수준 | 본 계획서 | 판정 |
+- 영역: 성능지표 구성, 평가방법·검증, 지식재산권, 경쟁사·시장 분석, 사업화 목표 산정근거, 고용계획, 글로벌 전략, 운영사 지원계획
+- 판정은 ✅ 선정기업 수준 이상 / ⚠️ 선정기업 수준에 근접(일부 보완) / ❌ 선정기업 수준 미달
+- "선정기업 수준" 칸에는 벤치마크의 패턴을 한 줄로 요약 (특정 회사·제품을 언급하지 말 것)
+표 아래에 다음 두 가지를 작성:
+- ✅ 로 시작하는 줄: 선정기업과 비교해 잘 작성된 점
+- ⚠️ 로 시작하는 줄: 평가위원 보완 요청 빈출 유형에 비추어 서면평가에서 지적받을 가능성이 높은 부분과 선정기업 사례처럼 보완하는 방법`);
+    if (n > 0) outFormat.push(`【개선 제안 (우선순위 순)】
 1. 가장 먼저 고쳐야 할 것부터 번호로 5개 이내`);
 
     const intro = split
@@ -992,15 +1007,19 @@ ${parts[i]}`;
     const target = split
       ? `=== 부분별 추출 정보 ===\n${notes.join('\n\n')}`
       : `=== 검토 대상: ${docLabel} ===\n${parts[0]}`;
-    const finalPrompt=`당신은 TIPS(민간투자주도형 기술창업지원) 연구개발계획서 전문 검토위원입니다.
-${intro}
-아래 "검토 기준"에 비추어 계획서를 검토하세요.
-
-검토 원칙:
+    const principles = `검토 원칙:
 - 판단 근거는 검토 기준과 계획서 내용만 사용하고, 기준에 없는 규정을 지어내지 마세요.
 - 계획서에서 찾을 수 없는 내용은 추측하지 말고 "계획서에서 확인되지 않음"이라고 쓰세요.
 - 수치를 언급할 때는 계획서 원문의 수치와 단위를 그대로 인용하세요.
-- ${EXCLUDE_RULE}
+- ${EXCLUDE_RULE}`;
+
+    let answer = '';
+    if (n > 0) {   // ①~③ 중 하나 이상 선택
+      const finalPrompt=`당신은 TIPS(민간투자주도형 기술창업지원) 연구개발계획서 전문 검토위원입니다.
+${intro}
+아래 "검토 기준"에 비추어 계획서를 검토하세요.
+
+${principles}
 
 === 검토 기준 ===
 ${criteria.join('\n\n')}
@@ -1012,7 +1031,29 @@ ${target}
 전반적인 완성도 3~4줄 + 가장 시급한 보완점 한 줄
 
 ${outFormat.join('\n\n')}`;
-    const answer = await paceCallAI(finalPrompt, 4000, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
+      answer = await paceCallAI(finalPrompt, 4096, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
+      if (doBenchmark) log.push('✔ 기준 대비 검토 완료');
+    }
+    if (doBenchmark) {
+      const bstep = '선정기업 대비 정성 평가 중...';
+      render(bstep);
+      const benchPrompt=`당신은 TIPS(민간투자주도형 기술창업지원) 연구개발계획서 전문 검토위원입니다.
+${intro}
+아래 "선정기업 벤치마크"는 실제 ${trackLabel} 선정기업들의 연구개발계획서를 분석한 결과입니다. 이와 비교해 이 계획서의 작성 수준을 정성적으로 평가하세요.
+
+${principles}
+- 벤치마크에 나온 특정 회사·제품을 추정하거나 언급하지 마세요.
+
+=== 선정기업 벤치마크 ===
+{{BENCHMARK}}
+
+${target}
+
+=== 출력 형식 (한국어, 【】 제목을 그대로 사용) ===
+${benchFormat}`;
+      const banswer = await paceCallAI(benchPrompt, 4096, s => render(`${bstep} (AI 사용 한도 대기 ${s}초)`), track);
+      answer = answer ? answer.trim() + '\n\n' + banswer.trim() : banswer;
+    }
 
     let note = omitted ? `\n\n※ 문서가 길어 뒷부분 약 ${omitted.toLocaleString()}자는 검토에서 제외되었습니다.` : '';
     if (doSuccess) {

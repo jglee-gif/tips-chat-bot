@@ -383,8 +383,14 @@ async function callAI(prompt) {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ prompt, accessCode })
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || '서버 오류');
+  const raw = await res.text();
+  let data;
+  try { data = JSON.parse(raw); }
+  catch (e) {
+    if (res.status === 504) throw new Error('서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.');
+    throw new Error(`서버 오류 (HTTP ${res.status}) ${raw.slice(0,200)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `서버 오류 (HTTP ${res.status})`);
   return data.answer;
 }
 
@@ -585,12 +591,15 @@ async function runReview() {
   btn.disabled=true; btn.textContent='⏳ AI 검토 중... (30초~1분 소요)';
   document.getElementById('reviewResult').style.display='none';
   try {
-    const relevant=retrieveChunks(typeLabels[selectedType]+' 작성 기준 요건 항목',8);
-    const context=relevant.map(c=>`[${c.s} p.${c.p}]\n${c.t}`).join('\n\n---\n\n');
+    // Groq 무료 한도(분당 12,000토큰)를 넘지 않도록 입력을 약 6,500자로 제한
+    // (한글은 1자 ≈ 1토큰 이상, 응답용 max_tokens 2,048 별도)
+    const relevant=retrieveChunks(typeLabels[selectedType]+' 작성 기준 요건 항목',4);
+    const context=relevant.map(c=>`[${c.s} p.${c.p}]\n${c.t.slice(0,500)}`).join('\n\n---\n\n');
     const maxLen=4000;
-    const truncated=extractedText.length>maxLen
-      ? extractedText.slice(0,maxLen)+'\n...(전체 '+extractedText.length.toLocaleString()+'자)'
-      : extractedText;
+    const docText=extractedText.replace(/[ \t]+/g,' ').replace(/\n{2,}/g,'\n');
+    const truncated=docText.length>maxLen
+      ? docText.slice(0,maxLen)+'\n...(이하 생략, 전체 '+extractedText.length.toLocaleString()+'자 중 앞부분만 검토)'
+      : docText;
     const prompt=`당신은 TIPS(민간투자주도형 기술창업지원) 사업계획서 전문 검토위원입니다.
 아래 TIPS 공식 기준 문서를 참고하여 제출된 "${typeLabels[selectedType]}"를 전문적으로 검토해 주세요.
 

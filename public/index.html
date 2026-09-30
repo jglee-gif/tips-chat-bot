@@ -281,12 +281,6 @@
           <button class="type-btn" onclick="selectType(this,'budget')">
             <span class="type-icon">💰</span>부록(사업비)
           </button>
-          <button class="type-btn" onclick="selectType(this,'biz')">
-            <span class="type-icon">📊</span>사업화계획
-          </button>
-          <button class="type-btn" onclick="selectType(this,'general')">
-            <span class="type-icon">📝</span>기타 서류
-          </button>
         </div>
         <div class="upload-zone" id="uploadZone"
           onclick="document.getElementById('fileInputReview').click()"
@@ -377,11 +371,11 @@ function checkCode() {
 // ============================================================
 // AI 호출 (Gemini via 서버리스)
 // ============================================================
-async function callAI(prompt) {
+async function callAI(prompt, maxTokens) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ prompt, accessCode })
+    body: JSON.stringify({ prompt, accessCode, maxTokens })
   });
   const raw = await res.text();
   let data;
@@ -390,7 +384,11 @@ async function callAI(prompt) {
     if (res.status === 504) throw new Error('서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.');
     throw new Error(`서버 오류 (HTTP ${res.status}) ${raw.slice(0,200)}`);
   }
-  if (!res.ok) throw new Error(data.error || `서버 오류 (HTTP ${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data.error || `서버 오류 (HTTP ${res.status})`);
+    if (res.status === 429) err.retryAfter = data.retryAfter || 30;
+    throw err;
+  }
   return data.answer;
 }
 
@@ -468,7 +466,7 @@ function switchTab(tab) {
 // ============================================================
 let selectedType = 'rd';
 let extractedText = '';
-const typeLabels = { rd:'연구개발계획서', budget:'부록(사업비/연구비)', biz:'사업화계획', general:'기타 서류' };
+const typeLabels = { rd:'연구개발계획서', budget:'부록(사업비/연구비)' };
 
 function selectType(btn, type) {
   document.querySelectorAll('.type-btn').forEach(b=>b.classList.remove('selected'));
@@ -580,6 +578,62 @@ function removeFile() {
   const btn=document.getElementById('reviewBtn'); btn.disabled=true; btn.textContent='파일을 먼저 업로드해 주세요';
 }
 
+// ------------------------------------------------------------
+// 분할 검토: 문서를 여러 부분으로 나눠 부분별 분석 → 최종 종합
+// Groq 무료 한도(분당 약 12,000토큰)를 넘지 않도록 요청 간격을 조절한다
+// ------------------------------------------------------------
+const REVIEW_PART_CHARS = 3500;   // 부분당 글자 수
+const REVIEW_MAX_PARTS = 12;      // 최대 부분 수 (약 42,000자)
+const TPM_BUDGET = 10000;         // 분당 사용 목표 (한도 12,000보다 여유 있게)
+const _tokenLog = [];             // [시각(ms), 추정 토큰]
+
+// 한글 1자 ≈ 1.2토큰으로 보수적으로 추정 + 응답 토큰
+function estimateTokens(prompt, maxTokens) { return Math.ceil(prompt.length * 1.2) + maxTokens; }
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function waitSeconds(sec, onTick) {
+  for (let s = Math.ceil(sec); s > 0; s--) { onTick(s); await sleep(1000); }
+}
+
+// 최근 60초 사용량이 예산을 넘으면 여유가 생길 때까지 대기 후 호출, 429면 재시도
+async function paceCallAI(prompt, maxTokens, onWait) {
+  const need = estimateTokens(prompt, maxTokens);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    while (true) {
+      const now = Date.now();
+      while (_tokenLog.length && now - _tokenLog[0][0] > 60000) _tokenLog.shift();
+      const used = _tokenLog.reduce((a, x) => a + x[1], 0);
+      if (!_tokenLog.length || used + need <= TPM_BUDGET) break;
+      await waitSeconds((_tokenLog[0][0] + 60000 - now) / 1000 + 1, onWait);
+    }
+    _tokenLog.push([Date.now(), need]);
+    try {
+      return await callAI(prompt, maxTokens);
+    } catch (err) {
+      if (!err.retryAfter || attempt === 3) throw err;
+      await waitSeconds(err.retryAfter + 2, onWait);
+    }
+  }
+}
+
+function splitDocument(text) {
+  const lines = text.split('\n');
+  const parts = [];
+  let cur = '';
+  for (let line of lines) {
+    while (line.length > REVIEW_PART_CHARS) {          // 아주 긴 줄은 강제로 자름
+      if (cur) { parts.push(cur); cur = ''; }
+      parts.push(line.slice(0, REVIEW_PART_CHARS));
+      line = line.slice(REVIEW_PART_CHARS);
+    }
+    if (cur.length + line.length + 1 > REVIEW_PART_CHARS) { parts.push(cur); cur = ''; }
+    cur += (cur ? '\n' : '') + line;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts;
+}
+
 async function runReview() {
   if (!extractedText) { alert('파일을 먼저 업로드해 주세요.'); return; }
   const checks=[];
@@ -587,27 +641,68 @@ async function runReview() {
   if(document.getElementById('chkContent').checked) checks.push('내용 충실도·누락 항목');
   if(document.getElementById('chkCompliance').checked) checks.push('TIPS 기준·규정 부합 여부');
   if(document.getElementById('chkImprove').checked) checks.push('개선 제안');
+  const docLabel = typeLabels[selectedType];
   const btn=document.getElementById('reviewBtn');
-  btn.disabled=true; btn.textContent='⏳ AI 검토 중... (30초~1분 소요)';
-  document.getElementById('reviewResult').style.display='none';
+  const resultBox=document.getElementById('reviewResult');
+  const title=document.getElementById('reviewTitle');
+  const body=document.getElementById('reviewBody');
+  btn.disabled=true;
+
+  const docText=extractedText.replace(/[ \t]+/g,' ').replace(/\n{2,}/g,'\n').trim();
+  let parts=splitDocument(docText);
+  let omitted=0;
+  if (parts.length>REVIEW_MAX_PARTS) {
+    omitted = parts.slice(REVIEW_MAX_PARTS).reduce((a,p)=>a+p.length,0);
+    parts = parts.slice(0,REVIEW_MAX_PARTS);
+  }
+  const total = parts.length + 1;   // 부분 분석 + 최종 종합
+  const log = [];
+  const render = (status) => {
+    btn.textContent = '⏳ ' + status;
+    body.textContent = log.concat(['⏳ ' + status]).join('\n');
+  };
+  title.textContent = docLabel + ' 검토 진행 중 (' + parts.length + '개 부분으로 나눠 분석)';
+  resultBox.style.display='block';
+
   try {
-    // Groq 무료 한도(분당 12,000토큰)를 넘지 않도록 입력을 약 6,500자로 제한
-    // (한글은 1자 ≈ 1토큰 이상, 응답용 max_tokens 2,048 별도)
-    const relevant=retrieveChunks(typeLabels[selectedType]+' 작성 기준 요건 항목',4);
-    const context=relevant.map(c=>`[${c.s} p.${c.p}]\n${c.t.slice(0,500)}`).join('\n\n---\n\n');
-    const maxLen=4000;
-    const docText=extractedText.replace(/[ \t]+/g,' ').replace(/\n{2,}/g,'\n');
-    const truncated=docText.length>maxLen
-      ? docText.slice(0,maxLen)+'\n...(이하 생략, 전체 '+extractedText.length.toLocaleString()+'자 중 앞부분만 검토)'
-      : docText;
-    const prompt=`당신은 TIPS(민간투자주도형 기술창업지원) 사업계획서 전문 검토위원입니다.
-아래 TIPS 공식 기준 문서를 참고하여 제출된 "${typeLabels[selectedType]}"를 전문적으로 검토해 주세요.
+    // 1단계: 부분별 분석
+    const notes = [];
+    for (let i=0;i<parts.length;i++) {
+      const step = `${i+1}/${total} 단계: ${i+1}번째 부분 분석 중...`;
+      render(step);
+      const partPrompt=`당신은 TIPS(민간투자주도형 기술창업지원) 사업계획서 검토위원입니다.
+아래는 "${docLabel}" 전체 ${parts.length}개 부분 중 ${i+1}번째 부분입니다.
+이 부분만 보고 다음을 한국어로 간결하게(최대 15줄) 정리하세요. 전체 평가는 하지 마세요.
+
+- 포함된 항목/목차: (이 부분에 어떤 섹션이 있는지)
+- 핵심 내용: (수치·목표·일정·예산 등 구체 정보 위주)
+- 잘된 점:
+- 보완 필요/미흡:
+
+=== ${i+1}번째 부분 ===
+${parts[i]}`;
+      const note = await paceCallAI(partPrompt, 600, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
+      notes.push(`[${i+1}번째 부분]\n${note.trim()}`);
+      log.push(`✔ ${i+1}번째 부분 분석 완료`);
+    }
+
+    // 2단계: 최종 종합 (부분 메모가 길면 균등하게 잘라 분량 제한)
+    const step = `${total}/${total} 단계: 최종 검토 의견 종합 중...`;
+    render(step);
+    const noteBudget = 5000;
+    const perNote = Math.floor(noteBudget / notes.length);
+    const notesText = notes.map(n => n.length>perNote ? n.slice(0,perNote)+'…' : n).join('\n\n');
+    const relevant=retrieveChunks(docLabel+' 작성 기준 요건 항목',3);
+    const context=relevant.map(c=>`[${c.s} p.${c.p}]\n${c.t.slice(0,450)}`).join('\n\n---\n\n');
+    const finalPrompt=`당신은 TIPS(민간투자주도형 기술창업지원) 사업계획서 전문 검토위원입니다.
+제출된 "${docLabel}"(전체 ${extractedText.length.toLocaleString()}자)를 ${notes.length}개 부분으로 나눠 분석한 메모가 아래에 있습니다.
+TIPS 공식 기준 문서를 참고하여 문서 전체에 대한 최종 검토 의견을 작성하세요.
 
 === TIPS 기준 문서 ===
 ${context}
 
-=== 검토 대상: ${typeLabels[selectedType]} ===
-${truncated}
+=== 부분별 분석 메모 ===
+${notesText}
 
 === 검토 항목: ${checks.join(', ')} ===
 
@@ -630,15 +725,25 @@ ${truncated}
 3.
 
 평가위원 관점에서 객관적이고 건설적으로, 한국어로 작성해 주세요.`;
-    const answer = await callAI(prompt);
-    document.getElementById('reviewTitle').textContent=typeLabels[selectedType]+' 검토 결과';
-    document.getElementById('reviewBody').textContent=answer;
-    document.getElementById('reviewResult').style.display='block';
-    document.getElementById('reviewResult').scrollIntoView({behavior:'smooth',block:'start'});
+    const answer = await paceCallAI(finalPrompt, 1800, s => render(`${step} (AI 사용 한도 대기 ${s}초)`));
+
+    title.textContent = docLabel + ' 검토 결과';
+    body.textContent = answer
+      + (omitted ? `\n\n※ 문서가 길어 뒷부분 약 ${omitted.toLocaleString()}자는 검토에서 제외되었습니다.` : '');
+    const details = document.createElement('details');
+    details.style.marginTop = '16px';
+    const summary = document.createElement('summary');
+    summary.textContent = `부분별 분석 메모 보기 (${notes.length}개)`;
+    summary.style.cursor = 'pointer'; summary.style.fontWeight = '600';
+    const pre = document.createElement('div');
+    pre.textContent = notes.join('\n\n');
+    pre.style.marginTop = '8px'; pre.style.color = '#555';
+    details.append(summary, pre);
+    body.appendChild(details);
+    resultBox.scrollIntoView({behavior:'smooth',block:'start'});
   } catch(err) {
-    document.getElementById('reviewTitle').textContent='오류';
-    document.getElementById('reviewBody').textContent='검토 중 오류: '+err.message;
-    document.getElementById('reviewResult').style.display='block';
+    title.textContent='오류';
+    body.textContent=log.concat(['❌ 검토 중 오류: '+err.message]).join('\n');
   }
   btn.disabled=false; btn.textContent='🔍 다시 검토';
 }

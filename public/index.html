@@ -265,21 +265,16 @@
 <div class="panel" id="panel-review">
   <div class="review-panel" id="reviewPanel">
 
-    <!-- 문서 유형 선택 -->
+    <!-- 트랙 선택 -->
     <div class="review-card">
-      <h3>📄 검토할 문서 유형</h3>
-      <div class="review-type-grid">
-        <button class="type-btn selected" onclick="selectType(this,'rd')">
-          <span class="type-icon">🔬</span>연구개발계획서<br><small style="color:#888;font-weight:400">R&D 계획서 본문</small>
+      <h3>📄 연구개발계획서 검토</h3>
+      <p style="color:#666;font-size:0.88em;margin:0 0 14px;">지원 트랙에 따라 평가기준이 다릅니다. 해당 트랙을 선택해 주세요.</p>
+      <div class="review-type-grid" style="grid-template-columns:1fr 1fr;">
+        <button class="type-btn selected" onclick="selectTrack(this,'general')">
+          <span class="type-icon">📘</span>일반형 트랙<br><small style="color:#888;font-weight:400">기술성·사업성·역량 평가</small>
         </button>
-        <button class="type-btn" onclick="selectType(this,'budget')">
-          <span class="type-icon">💰</span>부록(사업비)<br><small style="color:#888;font-weight:400">연구비 편성표</small>
-        </button>
-        <button class="type-btn" onclick="selectType(this,'biz')">
-          <span class="type-icon">📊</span>사업화계획<br><small style="color:#888;font-weight:400">비즈니스모델·목표</small>
-        </button>
-        <button class="type-btn" onclick="selectType(this,'general')">
-          <span class="type-icon">📝</span>기타 서류<br><small style="color:#888;font-weight:400">전반적인 검토</small>
+        <button class="type-btn" onclick="selectTrack(this,'deeptech')">
+          <span class="type-icon">🔬</span>딥테크 트랙<br><small style="color:#888;font-weight:400">심층기술 특화 평가</small>
         </button>
       </div>
     </div>
@@ -439,12 +434,12 @@ async function extractTextFromDOCX(arrayBuffer) {
 // 파일 처리
 // ============================================================
 let extractedText = '';
-let selectedType = 'rd';
+let selectedTrack = 'general';
 
-function selectType(btn, type) {
+function selectTrack(btn, track) {
   document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('selected'));
   btn.classList.add('selected');
-  selectedType = type;
+  selectedTrack = track;
 }
 
 function handleFileSelect(e) {
@@ -544,13 +539,6 @@ function goToMainChat() {
 // ============================================================
 // 검토 실행
 // ============================================================
-const typeLabels = {
-  rd: '연구개발계획서',
-  budget: '부록(사업비/연구비 편성)',
-  biz: '사업화계획',
-  general: '기타 서류'
-};
-
 async function runReview() {
   if (!extractedText) { alert('파일을 먼저 업로드해 주세요.'); return; }
 
@@ -566,7 +554,8 @@ async function runReview() {
   document.getElementById('reviewResult').style.display = 'none';
 
   try {
-    const relevant = retrieveChunks(typeLabels[selectedType] + ' 작성 기준 요건 항목', 8);
+    const trackLabel = selectedTrack === 'deeptech' ? '딥테크 트랙 연구개발계획서' : '일반형 트랙 연구개발계획서';
+    const relevant = retrieveChunks(trackLabel + ' 작성 기준 요건 평가 항목', 8);
     const context = relevant.map(c => `[${c.s} p.${c.p}]\n${c.t}`).join('\n\n---\n\n');
 
     const maxLen = 4000;
@@ -574,14 +563,59 @@ async function runReview() {
       ? extractedText.slice(0, maxLen) + '\n...(이하 생략, 전체 ' + extractedText.length.toLocaleString() + '자)'
       : extractedText;
 
+    let criteriaSection = '';
+    if (selectedTrack === 'general') {
+      criteriaSection = `=== 일반형 트랙 평가기준 ===
+【기술성 40점】
+• 개발 필요성 (15점): 기술적 문제 정의, 개발 배경, 시장/사회적 필요성
+• 개발 적정성 (15점): 개발 방법론 타당성, 일정·예산 적절성
+• 개발 실현성 (10점): 기술 난이도 대비 팀 역량, 실현 가능성
+
+【사업성 40점】
+• 사업화 전략 (20점): 목표 시장, BM, 경쟁우위, 매출 전략
+• 기타 사업성 항목 (20점): 시장 분석, 지재권 전략, 성장 경로
+
+【사업수행역량 20점】
+• 대표자·팀 역량, 운영사 지원계획, 보유 인프라
+
+【가점 최대 5점】
+• 지역균형발전, 벤처인증, 사회적가치 등`;
+    } else {
+      criteriaSection = `=== 딥테크 트랙 연구개발계획서 목차 및 평가기준 ===
+【I. 제안배경】
+• 기업 현황 (팀, 기술, 이전 개발 이력)
+• 기술개발과제 제안 배경 (문제 정의, 필요성)
+• 선행연구개발 현황 (국내외 기술 수준, 차별성)
+
+【II. 기술개발계획 및 내용】
+• 개발 목표 및 내용 (정량적 목표, 핵심 기술)
+• 추진전략·방법 (개발 방법론, 단계별 계획)
+• 연구 전담 인력·조직 (핵심 인력 역량)
+• 마일스톤 (단계별 성과지표)
+• 안전·보안 계획
+
+【III. 비즈니스모델】
+• 사업화 목표 및 계획
+• 목표 시장 분석 (TAM/SAM/SOM)
+• 국내/글로벌 진출 전략
+• 기대 효과
+
+【IV. 성장전략】
+• 운영사 보육 및 지원 계획
+• 추가 투자 유치 계획
+• 자금 조달 계획`;
+    }
+
     const prompt = `당신은 TIPS(민간투자주도형 기술창업지원) 운영지침 및 공식 교육자료를 기반으로 서류를 검토하는 도우미입니다.
-아래 TIPS 공식 문서만을 근거로 제출된 "${typeLabels[selectedType]}"의 작성 요건 충족 여부를 검토해 주세요.
+아래 TIPS 공식 문서만을 근거로 제출된 "${trackLabel}"의 작성 요건 충족 여부를 검토해 주세요.
 (특정 기업 사례나 타사 자료는 참고하지 않으며, 공식 운영지침·기준만 사용합니다.)
 
 === TIPS 기준 문서 ===
 ${context}
 
-=== 검토 대상: ${typeLabels[selectedType]} ===
+${criteriaSection}
+
+=== 검토 대상: ${trackLabel} ===
 ${truncated}
 
 === 검토 항목: ${checks.join(', ')} ===
@@ -597,97 +631,31 @@ ${truncated}
 ❌ 누락/미흡 (구체적으로)
 
 【TIPS 기준 부합 여부】
-규정·요건 대비 충족 여부
+평가기준 항목별 충족 여부 (각 항목에 ✅/⚠️/❌ 표시)
 
-【개선 제안 (우선순위 순)】
-1. 
-2. 
-3.
+【개선 제안】
+우선순위 순으로 구체적인 보완 방향 제시`;
 
-평가위원 관점에서 객관적이고 건설적으로, 한국어로 작성해 주세요.`;
+    const CODE = sessionStorage.getItem('accessCode') || '';
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, accessCode: CODE })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '서버 오류');
 
-    const raw = await window.cowork.askClaude(prompt, []);
-    let answer;
-    if (typeof raw === 'string') answer = raw;
-    else if (raw?.content?.[0]?.text) answer = raw.content[0].text;
-    else if (typeof raw?.content === 'string') answer = raw.content;
-    else if (raw?.text) answer = raw.text;
-    else answer = JSON.stringify(raw);
-
-    document.getElementById('reviewTitle').textContent = typeLabels[selectedType] + ' 검토 결과';
-    document.getElementById('reviewBody').textContent = answer;
+    const resultEl = document.getElementById('reviewResultContent');
+    resultEl.innerHTML = formatMessage(data.answer);
     document.getElementById('reviewResult').style.display = 'block';
-    document.getElementById('reviewResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-  } catch(err) {
-    document.getElementById('reviewTitle').textContent = '오류';
-    document.getElementById('reviewBody').textContent = '검토 중 오류가 발생했습니다: ' + err.message;
-    document.getElementById('reviewResult').style.display = 'block';
+  } catch(e) {
+    alert('검토 중 오류: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 AI 검토 시작';
   }
-
-  btn.disabled = false;
-  btn.textContent = '🔍 다시 검토';
 }
 
-// ============================================================
-// 키워드 검색
-// ============================================================
-const SYNONYMS={
-  '요건':['조건','기준'],'성공요건':['성공조건','성공기준','사업화성공조건'],
-  '사업화성공':['성공요건','성공조건','성공기준'],
-  '정산':['정산','집행','결산'],'연구비':['연구비','사업비','연구개발비'],
-  '사업비':['사업비','연구비','연구개발비'],
-};
-function expandTokens(tokens){
-  const e=new Set(tokens);
-  tokens.forEach(t=>{
-    if(SYNONYMS[t])SYNONYMS[t].forEach(s=>e.add(s));
-    if(t.length>=4){for(let i=2;i<=t.length-2;i++){e.add(t.slice(0,i));e.add(t.slice(i));}}
-  });
-  return[...e];
-}
-function tokenize(t){return(t.match(/[가-힣a-zA-Z0-9]+/g)||[]).filter(x=>x.length>=2);}
-function scoreChunk(chunk,tokens){
-  const text=chunk.t,tc=text.replace(/\s+/g,''),all=expandTokens(tokens);let s=0;
-  for(const t of all){const w=tokens.includes(t)?2:1;
-    if(text.includes(t)){s+=Math.sqrt(t.length)*w+Math.log(((text.match(new RegExp(t,'g'))||[]).length+1))*0.5*w;}
-    else if(tc.includes(t)){s+=Math.sqrt(t.length)*w*0.8;}}
-  return s;
-}
-function retrieveChunks(query,topK=12){
-  const tokens=tokenize(query);
-  if(!tokens.length)return KB.slice(0,5);
-  return KB.map(c=>({chunk:c,score:scoreChunk(c,tokens)}))
-    .filter(x=>x.score>0).sort((a,b)=>b.score-a.score)
-    .slice(0,topK).map(x=>x.chunk);
-}
-
-// ============================================================
-// Q&A
-// ============================================================
-const chatContainer = document.getElementById('chatContainer');
-const userInput = document.getElementById('userInput');
-const sendBtn = document.getElementById('sendBtn');
-
-function autoResize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,110)+'px'; }
-function handleKey(e) { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();} }
-function scrollBottom() { chatContainer.scrollTop=chatContainer.scrollHeight; }
-
-function addMessage(role, content) {
-  const msg=document.createElement('div'); msg.className='msg '+role;
-  const av=document.createElement('div'); av.className='avatar'; av.textContent=role==='bot'?'T':'👤';
-  const bub=document.createElement('div'); bub.className='bubble';
-  if(role==='bot'&&content==='__loading__')
-    bub.innerHTML='<div class="loading-dots"><span></span><span></span><span></span></div>';
-  else bub.textContent=content;
-  msg.appendChild(av); msg.appendChild(bub);
-  chatContainer.appendChild(msg); scrollBottom(); return bub;
-}
-
-function askSuggestion(btn) {
-  userInput.value=btn.textContent.replace(/^\S+ /,'').trim();
-  sendMessage();
-}
 
 async function sendMessage() {
   const text=userInput.value.trim();

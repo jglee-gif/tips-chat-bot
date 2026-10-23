@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>TIPS 질문봇</title>
 <style>
 @font-face{font-family:'Pretendard';src:url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Thin.woff2') format('woff2');font-weight:100;font-display:swap;}
@@ -156,6 +156,53 @@
   .rv-notes summary { cursor: pointer; font-weight: 500; color: var(--ink); }
   .rv-notes div { white-space: pre-wrap; margin-top: 8px; }
   .footer-note { text-align: center; font-size: 12px; color: #a0a0a0; padding: 6px 0 10px; flex-shrink: 0; font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+  /* 반응형: 데스크톱(기본) / 태블릿(~1024) / 모바일(~640) */
+  html { -webkit-text-size-adjust: 100%; }
+  body { height: 100vh; height: 100dvh; }
+  #app { height: 100vh !important; height: 100dvh !important; }
+  @media (max-width: 1024px) {
+    .header { padding: 0 24px; height: 64px; }
+    .chat-container { padding: 24px 20px; }
+    .welcome-card { padding: 52px 24px 44px; }
+    .bubble { max-width: 86%; }
+    .review-layout { grid-template-columns: 1fr; grid-auto-rows: max-content; overflow-y: auto; padding: 20px; gap: 20px; }
+    .review-side { overflow: visible; min-height: auto; }
+    .review-result { min-height: 60vh; }
+    .input-area { padding: 12px 20px; }
+  }
+  @media (max-width: 640px) {
+    .header { padding: 0 16px; height: 56px; }
+    .header-logo { font-size: 20px; }
+    .header-sub { display: none; }
+    .tabs { padding: 0 8px; }
+    .tab-btn { flex: 1; padding: 13px 8px; font-size: 14px; }
+    .chat-container { padding: 14px 12px; gap: 12px; }
+    .welcome-card { padding: 32px 18px 28px; border-radius: 10px; }
+    .welcome-card h2 { font-size: 30px; letter-spacing: -1px; }
+    .welcome-card p { font-size: 14px; margin-bottom: 20px; }
+    .chip { font-size: 11px; margin-bottom: 14px; }
+    .suggestions { gap: 6px; }
+    .suggestion-btn { font-size: 13px; padding: 9px 13px; }
+    .msg { gap: 8px; }
+    .avatar { width: 30px; height: 30px; }
+    .avatar svg { width: 15px; height: 15px; }
+    .bubble { max-width: calc(100% - 40px); font-size: 14.5px; padding: 11px 14px; }
+    .source-tag { font-size: 12px; padding: 5px 10px; }
+    .input-area { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); gap: 8px; }
+    textarea.chat-input { font-size: 16px; padding: 11px 14px; }
+    .send-btn { width: 44px; height: 44px; }
+    .footer-note { font-size: 10px; padding: 4px 12px 8px; }
+    .review-layout { padding: 12px; gap: 14px; }
+    .review-card { padding: 16px; }
+    .review-result-header { padding: 14px 16px; font-size: 15px; }
+    .review-result-body { padding: 18px 16px; font-size: 15px; }
+    .rv-section h3 { font-size: 19px; }
+    .rv-section table { display: block; overflow-x: auto; font-size: 13px; }
+    .gate-card { padding: 32px 24px; }
+    .gate-card h2 { font-size: 36px; }
+    .gate-input { font-size: 16px; }
+  }
 </style>
 </head>
 <body>

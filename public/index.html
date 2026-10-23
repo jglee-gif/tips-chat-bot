@@ -683,10 +683,17 @@ async function processFile(file) {
       });
       if (!text || text.trim().length <= 100) {
         // 스캔(이미지)형 PDF: 페이지를 이미지로 바꿔 AI로 글자를 인식(OCR)
-        label.textContent = '스캔(이미지)형 PDF입니다. AI로 글자를 인식합니다...';
+        label.textContent = '스캔(이미지)형 PDF입니다. AI로 글자를 인식합니다. 페이지 수를 확인하는 중...';
+        const ocrStart = Date.now();
+        const fmtEta = (sec) => sec < 60 ? '약 1분 이내' : '약 ' + Math.ceil(sec / 60) + '분';
         text = await ocrPDF(ab.slice(0), (i, n, wait) => {
           fill.style.width = (10 + Math.round(85 * i / n)) + '%';
-          label.textContent = wait ? `AI 사용 한도 대기 ${wait}초... (${i}/${n} 페이지 인식 완료)` : `스캔 PDF 글자 인식 중... (${i}/${n} 페이지, 시간이 걸립니다)`;
+          // 처음에는 페이지당 약 4초로 추정하고, 진행되면 실제 속도로 남은 시간을 다시 계산
+          const elapsed = (Date.now() - ocrStart) / 1000;
+          const perPage = i >= 2 ? elapsed / i : 4;
+          const eta = Math.max(0, (n - i) * perPage);
+          const etaText = i >= n ? '' : ' · 남은 시간 ' + fmtEta(eta);
+          label.textContent = wait ? `AI 사용 한도 대기 중... (${i}/${n}쪽 완료)${etaText}` : `글자 인식 중... (${i}/${n}쪽)${etaText}`;
         });
       }
     } else if (ext==='docx') {

@@ -392,11 +392,11 @@ function loadOperatorKB() {
 // ============================================================
 // AI 호출 (Claude via 서버리스)
 // ============================================================
-async function callAI(prompt, maxTokens) {
+async function callAI(prompt, maxTokens, images) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ prompt, accessCode, maxTokens })
+    body: JSON.stringify({ prompt, accessCode, maxTokens, images })
   });
   const raw = await res.text();
   let data;
@@ -611,6 +611,55 @@ async function extractTextFromDOCX(arrayBuffer) {
   return value.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+const OCR_MAX_PAGES = 60;     // 한 번에 인식할 최대 페이지
+const OCR_BATCH = 2;          // 요청당 페이지 수
+const OCR_IMG_TOKENS = 2300;  // 이미지 1장당 추정 입력 토큰
+async function renderPageJPEG(pdf, num) {
+  const page = await pdf.getPage(num);
+  const base = page.getViewport({ scale: 1 });
+  const scale = 1100 / base.width;
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+  const data = canvas.toDataURL('image/jpeg', 0.72).split(',')[1];
+  canvas.width = canvas.height = 0;
+  return data;
+}
+async function ocrPDF(arrayBuffer, onProgress) {
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFJS_VER + '/pdf.min.js');
+  const pdfjsLib = window['pdfjs-dist/build/pdf'];
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFJS_VER + '/pdf.worker.min.js';
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+  const total = Math.min(pdf.numPages, OCR_MAX_PAGES);
+  const prompt = '첨부된 이미지는 TIPS 연구개발계획서의 연속된 페이지입니다. 이미지 속 한국어 글자를 페이지 순서대로 빠짐없이 그대로 옮겨 적으세요. 표는 한 행씩 " | "로 칸을 구분해 적고, 그림·도표 안의 글자도 포함하세요. 설명이나 머리말 없이 인식한 글자만 출력하세요.';
+  const out = [];
+  for (let start = 1; start <= total; start += OCR_BATCH) {
+    const imgs = [];
+    for (let p = start; p < start + OCR_BATCH && p <= total; p++) imgs.push(await renderPageJPEG(pdf, p));
+    const need = imgs.length * OCR_IMG_TOKENS + 400;
+    let ans = '';
+    for (let attempt = 0; attempt < 4; attempt++) {
+      while (true) {
+        const now = Date.now();
+        while (_tokenLog.length && now - _tokenLog[0][0] > 60000) _tokenLog.shift();
+        const used = _tokenLog.reduce((a, x) => a + x[1], 0);
+        if (!_tokenLog.length || used + need <= TPM_BUDGET) break;
+        const w = Math.ceil((_tokenLog[0][0] + 60000 - now) / 1000) + 1;
+        onProgress(start - 1, total, w); await sleep(1000);
+      }
+      _tokenLog.push([Date.now(), need]);
+      try { ans = await callAI(prompt, 4096, imgs); break; }
+      catch (err) { if (!err.retryAfter || attempt === 3) throw err; onProgress(start - 1, total, err.retryAfter); await sleep(err.retryAfter * 1000); }
+    }
+    out.push(ans.trim());
+    onProgress(Math.min(start + OCR_BATCH - 1, total), total, 0);
+  }
+  let text = out.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (pdf.numPages > total) text += '\n\n※ 문서가 길어 앞 ' + total + '쪽만 인식했습니다.';
+  return text;
+}
+
 async function processFile(file) {
   document.getElementById('fileName').textContent = file.name;
   document.getElementById('fileSize').textContent = '('+((file.size/1024).toFixed(0))+'KB)';
@@ -628,10 +677,18 @@ async function processFile(file) {
     if (ext==='txt'||ext==='md') {
       text = new TextDecoder('utf-8',{fatal:false}).decode(new Uint8Array(ab));
     } else if (ext==='pdf') {
-      text = await extractTextFromPDF(ab, (i, n) => {
+      text = await extractTextFromPDF(ab.slice(0), (i, n) => {
         fill.style.width = (60 + Math.round(35 * i / n)) + '%';
         label.textContent = `텍스트 추출 중... (${i}/${n} 페이지)`;
       });
+      if (!text || text.trim().length <= 100) {
+        // 스캔(이미지)형 PDF: 페이지를 이미지로 바꿔 AI로 글자를 인식(OCR)
+        label.textContent = '스캔(이미지)형 PDF입니다. AI로 글자를 인식합니다...';
+        text = await ocrPDF(ab.slice(0), (i, n, wait) => {
+          fill.style.width = (10 + Math.round(85 * i / n)) + '%';
+          label.textContent = wait ? `AI 사용 한도 대기 ${wait}초... (${i}/${n} 페이지 인식 완료)` : `스캔 PDF 글자 인식 중... (${i}/${n} 페이지, 시간이 걸립니다)`;
+        });
+      }
     } else if (ext==='docx') {
       text = await extractTextFromDOCX(ab);
     } else {
@@ -647,7 +704,7 @@ async function processFile(file) {
       btn.disabled=false; btn.textContent='🔍 검토 시작';
     } else {
       extractedText='';
-      label.textContent='❌ 텍스트 추출 실패 — 스캔(이미지)형 PDF로 보입니다. 원본(한글/Word)에서 PDF로 다시 저장해 업로드해 주세요.';
+      label.textContent='❌ 텍스트 추출 실패 — 글자를 인식하지 못했습니다. 원본(한글/Word)에서 PDF로 다시 저장해 업로드해 주세요.';
       btn.disabled=true; btn.textContent='파일을 다시 업로드해 주세요';
     }
   } catch(err) { label.textContent='오류: '+err.message; btn.disabled=true; }

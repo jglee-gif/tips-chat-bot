@@ -30,8 +30,9 @@ module.exports = async function handler(req, res) {
   const prompt = body?.prompt;
   const maxTokens = Math.min(Math.max(parseInt(body?.maxTokens, 10) || 2048, 128), 4096);
 
-  const okCodes = [process.env.ACCESS_CODE, process.env.OPERATOR_CODE].filter(Boolean);
-  if (!accessCode || !okCodes.includes(accessCode)) {
+  const norm = (v) => String(v || '').trim().toLowerCase();
+  const okCodes = [process.env.ACCESS_CODE, process.env.OPERATOR_CODE].filter(Boolean).map(norm);
+  if (!norm(accessCode) || !okCodes.includes(norm(accessCode))) {
     return res.status(401).json({ error: '접근 코드가 올바르지 않습니다.' });
   }
   if (!prompt) {

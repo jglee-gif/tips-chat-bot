@@ -42,11 +42,16 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'Vercel 환경변수 ANTHROPIC_API_KEY가 설정되어 있지 않습니다. 설정 후 Redeploy 해주세요.' });
   }
 
+  const images = Array.isArray(body?.images) ? body.images.slice(0, 4).filter((s) => typeof s === 'string' && s.length < 2000000) : [];
+  const userContent = images.length
+    ? [...images.map((data) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } })), { type: 'text', text: prompt }]
+    : prompt;
+
   try {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: userContent }],
     });
     const text = response.content
       .filter((b) => b.type === 'text')
